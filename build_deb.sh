@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-VERSION=${1:-2.0.0}
+VERSION=${1:-3.0.0}
 PKG=build/vibebeat_${VERSION}_amd64
 
 rm -rf build && mkdir -p $PKG/DEBIAN $PKG/opt $PKG/usr/bin \
@@ -16,26 +16,27 @@ Version: $VERSION
 Section: sound
 Priority: optional
 Architecture: amd64
-Depends: libc6, libegl1, libgl1, libpulse0, libxkbcommon-x11-0, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-render-util0, libxcb-shape0
+Depends: libc6, libegl1, libgl1, libxkbcommon-x11-0, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-render-util0, libxcb-shape0, libpulse0 | libasound2t64 | libasound2
 Maintainer: Iqbal Uddin Khan <iqbalsound@yahoo.com>
 Homepage: https://github.com/iqbalsound/vibebeat
-Description: VibeBeat MP3 player
- A simple, fast MP3 player with playlists (XSPF, M3U, PLS), album art,
- detachable spectrum bars and Light, Dark and Green-on-Black themes.
+Description: VibeBeat MP3 player with graphic equalizer
+ A simple, fast MP3 player with a 10-band equalizer (Rock, Pop, Vocal,
+ Flat, Bass Boosted), playlists (XSPF, M3U, PLS), album art, detachable
+ spectrum bars and Light, Dark and Green-on-Black themes.
 EOF
 
 cat > $PKG/usr/share/applications/vibebeat.desktop <<EOF
 [Desktop Entry]
 Name=VibeBeat
-Comment=Simple MP3 player
+Comment=Simple MP3 player with equalizer
 Exec=/usr/bin/vibebeat %F
 Icon=vibebeat
 Type=Application
 Categories=AudioVideo;Audio;Player;
-MimeType=audio/mpeg;audio/x-wav;audio/ogg;audio/flac;audio/mp4;
+MimeType=audio/mpeg;audio/x-wav;audio/ogg;audio/flac;
 Terminal=false
 EOF
 
 chmod 755 $PKG/opt/vibebeat/vibebeat
-dpkg-deb --build --root-owner-group $PKG
+dpkg-deb --root-owner-group -Zxz --build $PKG
 echo "Done: build/vibebeat_${VERSION}_amd64.deb"

@@ -1,18 +1,24 @@
 # VibeBeat
 
-A simple, fast MP3 player with playlists, album art, detachable spectrum bars
-and Light, Dark and Green-on-Black themes. Built with Python + PySide6.
+A simple, fast MP3 player with a 10-band graphic equalizer, playlists, album art,
+detachable spectrum bars and Light, Dark and Green-on-Black themes.
+Built with Python + PySide6.
 
-## Features (v2.0)
-- Detachable spectrum window; pops out automatically when minimised
-- Bar colours: Fluorescent Green, White, Fluorescent Blue
-- Bar styles: Solid or Segmented (Jet Audio style)
+## Features (v3.0)
+- Equalizer presets: Flat, Rock, Pop, Vocal, Bass Boosted + manual sliders
+- Detachable spectrum window with optional "keep on top"
+- Bar colours: Fluorescent Green, White, Blue, Purple; Solid or Segmented bars
 - Playlists: save/open XSPF, M3U8, M3U, PLS
-- Shuffle, repeat, ID3 tags, album art, drag-and-drop, saved session
+- MP3, FLAC, OGG, WAV; shuffle, repeat, album art, saved session
 
-## Install (Ubuntu 22.04+, Debian 12+, Mint 21+, Kubuntu)
-Download the `.deb` from Releases, then:
-    sudo apt install ./vibebeat_2.0.0_amd64.deb
+## Install on Ubuntu / Kubuntu / Debian / Mint (APT repository)
+    sudo install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://iqbalsound.github.io/vibebeat/vibebeat.gpg | sudo tee /etc/apt/keyrings/vibebeat.gpg >/dev/null
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/vibebeat.gpg] https://iqbalsound.github.io/vibebeat stable main" | sudo tee /etc/apt/sources.list.d/vibebeat.list
+    sudo apt update && sudo apt install vibebeat
+
+Or download the `.deb` from Releases: `sudo apt install ./vibebeat_3.0.0_amd64.deb`
+(Ubuntu 22.04+, Debian 12+, Mint 21+, amd64).
 
 ## Windows
 Download `vibebeat-windows.zip` from Releases, unzip, run `vibebeat.exe`.

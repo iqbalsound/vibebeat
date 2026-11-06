@@ -2,45 +2,51 @@ import json
 import random
 import re
 import sys
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import miniaudio
 import numpy as np
 from mutagen import File as MutagenFile
 from PySide6.QtCore import QEvent, QRectF, QStandardPaths, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPalette, QPixmap
-from PySide6.QtMultimedia import QAudioFormat, QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                                QFileDialog, QHBoxLayout, QLabel, QListWidget,
                                QMenu, QMessageBox, QPushButton, QSizeGrip,
                                QSlider, QVBoxLayout, QWidget)
-
-try:
-    from PySide6.QtMultimedia import QAudioBufferOutput  # Qt 6.8+
-    HAS_BUF = True
-except ImportError:
-    HAS_BUF = False
+from scipy.signal import sosfilt
 
 # ---- About box info: edit these to your own details ----
 APP_NAME = "VibeBeat"
-APP_VERSION = "2.0.0"
-APP_DESCRIPTION = ("A simple, fast MP3 player with playlists, album art,\n"
-                   "detachable spectrum bars and Light, Dark and Green-on-Black themes.")
+APP_VERSION = "3.0.0"
+APP_DESCRIPTION = ("A simple, fast MP3 player with a graphic equalizer, playlists,\n"
+                   "album art, detachable spectrum bars and 3 themes.")
 AUTHOR_NAME = "Iqbal Uddin Khan"
 AUTHOR_TITLE = "Assistant Professor | DIT-HU -- NN Site KHI"
 AUTHOR_EMAIL = "iqbalsound@yahoo.com"
 GITHUB_URL = "https://github.com/iqbalsound/vibebeat"
 COPYRIGHT = "© 2026 Iqbal Uddin Khan. Released under the MIT License."
 
+SR = 44100
 BANDS = 28
-BAR_POS = 1  # position of the bar graph in the main layout
+BAR_POS = 1
 REPEAT_LABELS = ["Repeat: Off", "Repeat: All", "Repeat: One"]
-AUDIO_EXT = {".mp3", ".wav", ".ogg", ".flac", ".m4a"}
+AUDIO_EXT = {".mp3", ".wav", ".ogg", ".flac"}
 PLAYLIST_EXT = {".xspf", ".m3u", ".m3u8", ".pls"}
 BAR_COLORS = {"Fluorescent Green": "#39FF14", "White": "#FFFFFF",
-              "Fluorescent Blue": "#04D9FF"}
+              "Fluorescent Blue": "#04D9FF", "Fluorescent Purple": "#BC13FE"}
 BAR_STYLES = ["Solid bars", "Segmented bars"]
 XSPF_NS = "http://xspf.org/ns/0/"
+
+EQ_FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+EQ_PRESETS = {
+    "Flat":         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "Rock":         [5, 4, 3, 1, -1, -1, 1, 3, 4, 5],
+    "Pop":          [-1, 2, 4, 5, 3, 0, -1, -1, -1, -1],
+    "Vocal":        [-3, -3, -2, 1, 4, 5, 4, 2, 0, -1],
+    "Bass Boosted": [8, 7, 6, 4, 2, 0, 0, 0, 0, 0],
+}
 
 THEMES = {
     "Light": dict(bg="#f2f2f2", base="#ffffff", text="#202020", hl="#2d8cff",
@@ -181,32 +187,155 @@ def read_playlist(path):
     return out
 
 
-# ---------------- spectrum ----------------
-def spectrum(buf, bands):
-    fmt_ = buf.format()
-    SF = QAudioFormat.SampleFormat
-    sf = fmt_.sampleFormat()
-    dtype = {SF.UInt8: np.uint8, SF.Int16: np.int16,
-             SF.Int32: np.int32, SF.Float: np.float32}.get(sf)
-    if dtype is None:
-        raise ValueError("unsupported sample format")
-    raw = bytes(buf.constData())[: buf.byteCount()]
-    x = np.frombuffer(raw, dtype=dtype).astype(np.float32)
-    if sf == SF.UInt8:
-        x = (x - 128) / 128
-    elif sf == SF.Int16:
-        x /= 32768
-    elif sf == SF.Int32:
-        x /= 2 ** 31
-    ch = max(1, fmt_.channelCount())
-    x = x[: len(x) // ch * ch].reshape(-1, ch).mean(axis=1)[-2048:]
-    if len(x) < 256:
-        return None
+# ---------------- audio engine (decode + equalizer + output) ----------------
+def peaking_sos(gains, sr=SR, q=1.41):
+    rows = []
+    for f, g in zip(EQ_FREQS, gains):
+        A = 10 ** (g / 40)
+        w0 = 2 * np.pi * f / sr
+        al = np.sin(w0) / (2 * q)
+        c = np.cos(w0)
+        b0, b1, b2 = 1 + al * A, -2 * c, 1 - al * A
+        a0, a1, a2 = 1 + al / A, -2 * c, 1 - al / A
+        rows.append([b0 / a0, b1 / a0, b2 / a0, 1.0, a1 / a0, a2 / a0])
+    return np.array(rows)
+
+
+class Engine:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.data = None
+        self.pos = 0
+        self.playing = False
+        self.ended = False
+        self.vol = 0.7 ** 2
+        self.sos = peaking_sos([0] * 10)
+        self.zi = np.zeros((10, 2, 2))
+        self.pre = 1.0
+        self.bypass = True
+        self.viz = np.zeros(2048, dtype=np.float32)
+        self.device = None
+        self.error = ""
+
+    def start_device(self):
+        try:
+            self.device = miniaudio.PlaybackDevice(
+                output_format=miniaudio.SampleFormat.SIGNED16,
+                nchannels=2, sample_rate=SR, buffersize_msec=80)
+            gen = self._stream()
+            next(gen)
+            self.device.start(gen)
+            return True
+        except Exception as ex:
+            self.error = str(ex)
+            return False
+
+    def close(self):
+        try:
+            if self.device:
+                self.device.close()
+        except Exception:
+            pass
+
+    def _stream(self):
+        frames = yield b""
+        while True:
+            try:
+                chunk = self._render(frames)
+            except Exception:
+                chunk = bytes(frames * 4)
+            frames = yield chunk
+
+    def _render(self, n):
+        with self.lock:
+            if not self.playing or self.data is None:
+                return bytes(n * 4)
+            chunk = self.data[self.pos:self.pos + n]
+            k = len(chunk)
+            self.pos += k
+            if k < n:
+                self.playing = False
+                self.ended = True
+            out = np.zeros((n, 2), dtype=np.float32)
+            if k:
+                x = chunk.astype(np.float32) / 32768.0
+                if not self.bypass:
+                    x, self.zi = sosfilt(self.sos, x * self.pre, axis=0, zi=self.zi)
+                self.viz = np.concatenate(
+                    (self.viz, x.mean(axis=1).astype(np.float32)))[-2048:]
+                out[:k] = x * self.vol
+            return (np.clip(out, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+
+    # --- control (called from the GUI thread) ---
+    def load(self, path):
+        dec = miniaudio.decode_file(path, output_format=miniaudio.SampleFormat.SIGNED16,
+                                    nchannels=2, sample_rate=SR)
+        arr = np.frombuffer(dec.samples, dtype=np.int16).reshape(-1, 2)
+        with self.lock:
+            self.playing = False
+            self.ended = False
+            self.data = arr
+            self.pos = 0
+            self.zi[:] = 0
+
+    def play(self):
+        with self.lock:
+            if self.data is None:
+                return
+            if self.pos >= len(self.data):
+                self.pos = 0
+            self.ended = False
+            self.playing = True
+
+    def pause(self):
+        with self.lock:
+            self.playing = False
+
+    def stop(self):
+        with self.lock:
+            self.playing = False
+            self.ended = False
+            self.pos = 0
+            self.zi[:] = 0
+
+    def seek(self, ms):
+        with self.lock:
+            if self.data is not None:
+                self.pos = int(min(max(ms, 0) * SR / 1000, len(self.data)))
+                self.zi[:] = 0
+
+    def position_ms(self):
+        return int(self.pos * 1000 / SR)
+
+    def duration_ms(self):
+        d = self.data
+        return 0 if d is None else int(len(d) * 1000 / SR)
+
+    def set_volume(self, v):
+        self.vol = float(v) ** 2
+
+    def set_gains(self, gains):
+        gains = [float(g) for g in gains]
+        sos = peaking_sos(gains)
+        pre = 10 ** (-max(0.0, max(gains)) / 20)   # headroom against clipping
+        bypass = not any(gains)
+        with self.lock:
+            self.sos, self.pre, self.bypass = sos, pre, bypass
+            if bypass:
+                self.zi[:] = 0
+
+    def get_viz(self):
+        return self.viz.copy()
+
+
+# ---------------- spectrum bars ----------------
+def spectrum(x, bands):
     n = len(x)
+    if n < 1024:
+        return None
     mag = np.abs(np.fft.rfft(x * np.hanning(n))) / (n / 4)
-    sr = fmt_.sampleRate()
-    freqs = np.fft.rfftfreq(n, 1.0 / sr)
-    edges = np.logspace(np.log10(40), np.log10(min(16000, sr / 2 - 1)), bands + 1)
+    freqs = np.fft.rfftfreq(n, 1.0 / SR)
+    edges = np.logspace(np.log10(40), np.log10(16000), bands + 1)
     out = np.zeros(bands)
     for i in range(bands):
         sel = (freqs >= edges[i]) & (freqs < edges[i + 1])
@@ -266,12 +395,14 @@ class BarGraph(QWidget):
 
 
 class FloatBars(QWidget):
-    """Frameless, rounded, always-on-top window that holds the bar graph."""
+    """Frameless, rounded window holding the bar graph. Keep-on-top is optional."""
     closed = Signal()
 
-    def __init__(self, owner):
-        super().__init__(None, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
-                         | Qt.WindowType.WindowStaysOnTopHint)
+    def __init__(self, owner, on_top=True):
+        flags = Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+        if on_top:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        super().__init__(None, flags)
         self.owner = owner
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -282,6 +413,14 @@ class FloatBars(QWidget):
         self.lay = QVBoxLayout(self)
         self.lay.setContentsMargins(0, 0, 0, 0)
         self.grip = QSizeGrip(self)
+
+    def set_on_top(self, on):
+        was_visible = self.isVisible()
+        geo = self.geometry()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(on))
+        if was_visible:
+            self.show()
+            self.setGeometry(geo)
 
     def hold(self, graph):
         graph.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -303,6 +442,10 @@ class FloatBars(QWidget):
     def contextMenuEvent(self, e):
         menu = QMenu(self)
         menu.addAction("Attach to main window", self.owner.attach)
+        top = menu.addAction("Keep on top")
+        top.setCheckable(True)
+        top.setChecked(self.owner.on_top.isChecked())
+        top.toggled.connect(self.owner.on_top.setChecked)
         cm = menu.addMenu("Colour")
         for n in BAR_COLORS:
             cm.addAction(n, lambda checked=False, n=n: self.owner.color_box.setCurrentText(n))
@@ -314,6 +457,59 @@ class FloatBars(QWidget):
     def closeEvent(self, e):
         self.closed.emit()
         e.accept()
+
+
+# ---------------- equalizer window ----------------
+class EqDialog(QDialog):
+    changed = Signal(list)
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Equalizer")
+        lay = QVBoxLayout(self)
+        row = QHBoxLayout()
+        self.sliders, self.labels = [], []
+        for f in EQ_FREQS:
+            col = QVBoxLayout()
+            val = QLabel("0 dB")
+            val.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            s = QSlider(Qt.Orientation.Vertical)
+            s.setRange(-12, 12)
+            s.setValue(0)
+            s.setMinimumHeight(170)
+            s.valueChanged.connect(self._moved)
+            name = QLabel(f"{f // 1000}k" if f >= 1000 else str(f))
+            name.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            col.addWidget(val)
+            col.addWidget(s, 1, Qt.AlignmentFlag.AlignHCenter)
+            col.addWidget(name)
+            row.addLayout(col)
+            self.sliders.append(s)
+            self.labels.append(val)
+        lay.addLayout(row)
+        btn = QPushButton("Reset to Flat")
+        btn.clicked.connect(lambda: self.set_gains([0] * 10, emit=True))
+        lay.addWidget(btn)
+
+    def gains(self):
+        return [float(s.value()) for s in self.sliders]
+
+    def _refresh(self):
+        for s, l in zip(self.sliders, self.labels):
+            l.setText(f"{s.value():+d} dB")
+
+    def _moved(self, _=None):
+        self._refresh()
+        self.changed.emit(self.gains())
+
+    def set_gains(self, g, emit=False):
+        for s, v in zip(self.sliders, g):
+            s.blockSignals(True)
+            s.setValue(int(round(v)))
+            s.blockSignals(False)
+        self._refresh()
+        if emit:
+            self.changed.emit(self.gains())
 
 
 # ---------------- themes ----------------
@@ -354,6 +550,11 @@ QSlider::sub-page:horizontal {{ background: {c['hl']}; border-radius: 3px; }}
 QSlider::handle:horizontal {{
     background: {c['text']}; width: 14px; margin: -5px 0; border-radius: 7px;
 }}
+QSlider::groove:vertical {{ width: 6px; background: {c['border']}; border-radius: 3px; }}
+QSlider::add-page:vertical {{ background: {c['hl']}; border-radius: 3px; }}
+QSlider::handle:vertical {{
+    background: {c['text']}; height: 14px; margin: 0 -5px; border-radius: 7px;
+}}
 """
 
 
@@ -362,20 +563,14 @@ class Player(QWidget):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(resource("icon.png")))
-        self.resize(600, 820)
+        self.resize(600, 900)
         self.setAcceptDrops(True)
         self.tracks, self.index, self.history = [], -1, []
         self.shuffle, self.repeat = False, 0
-        self.fake = not HAS_BUF
         self.floating = self.auto_detached = self.placed = False
 
-        self.audio = QAudioOutput()
-        self.player = QMediaPlayer()
-        self.player.setAudioOutput(self.audio)
-        if HAS_BUF:
-            self.buf_out = QAudioBufferOutput(self)
-            self.buf_out.audioBufferReceived.connect(self.on_buffer)
-            self.player.setAudioBufferOutput(self.buf_out)
+        self.engine = Engine()
+        self.audio_ok = self.engine.start_device()
 
         # --- widgets ---
         self.art = QLabel("♪")
@@ -388,15 +583,21 @@ class Player(QWidget):
         self.lbl_title.setWordWrap(True)
         self.lbl_artist, self.lbl_album = QLabel(""), QLabel("")
         self.bars = BarGraph(BANDS)
-        self.float_win = FloatBars(self)
+        self.float_win = FloatBars(self, True)
         self.float_win.closed.connect(self.attach)
         self.color_box = QComboBox()
         self.color_box.addItems(list(BAR_COLORS))
         self.style_box = QComboBox()
         self.style_box.addItems(BAR_STYLES)
         self.btn_detach = QPushButton("Detach bars")
+        self.on_top = QCheckBox("Keep bars on top")
+        self.on_top.setChecked(True)
         self.auto_pop = QCheckBox("Pop out bars when minimised")
         self.auto_pop.setChecked(True)
+        self.eq_box = QComboBox()
+        self.eq_box.addItems(list(EQ_PRESETS) + ["Custom"])
+        self.btn_eq = QPushButton("Equalizer sliders")
+        self.eq_dialog = EqDialog(self)
         self.seek = QSlider(Qt.Orientation.Horizontal)
         self.time = QLabel("0:00 / 0:00")
         self.volume = QSlider(Qt.Orientation.Horizontal)
@@ -431,7 +632,13 @@ class Player(QWidget):
         bar_row1.addWidget(self.style_box, 1)
         bar_row2 = QHBoxLayout()
         bar_row2.addWidget(self.btn_detach)
-        bar_row2.addWidget(self.auto_pop, 1)
+        bar_row2.addWidget(self.on_top, 1)
+        bar_row3 = QHBoxLayout()
+        bar_row3.addWidget(self.auto_pop)
+        eq_row = QHBoxLayout()
+        eq_row.addWidget(QLabel("Equalizer"))
+        eq_row.addWidget(self.eq_box, 1)
+        eq_row.addWidget(self.btn_eq)
 
         controls = QHBoxLayout()
         for b in (self.btn_prev, self.btn_play, self.btn_stop, self.btn_next,
@@ -453,6 +660,8 @@ class Player(QWidget):
         self.lay.addWidget(self.bars)     # index 1 (BAR_POS)
         self.lay.addLayout(bar_row1)
         self.lay.addLayout(bar_row2)
+        self.lay.addLayout(bar_row3)
+        self.lay.addLayout(eq_row)
         self.lay.addWidget(self.seek)
         self.lay.addWidget(self.time)
         self.lay.addLayout(controls)
@@ -470,22 +679,22 @@ class Player(QWidget):
         btn_save_pl.clicked.connect(self.save_playlist)
         btn_about.clicked.connect(self.show_about)
         self.btn_detach.clicked.connect(self.toggle_detach)
+        self.on_top.toggled.connect(self.float_win.set_on_top)
         self.color_box.currentTextChanged.connect(self.set_bar_color)
         self.style_box.currentIndexChanged.connect(self.set_bar_style)
+        self.eq_box.currentTextChanged.connect(self.on_eq_preset)
+        self.btn_eq.clicked.connect(self.show_eq)
+        self.eq_dialog.changed.connect(self.on_eq_slider)
         self.btn_prev.clicked.connect(self.prev)
         self.btn_next.clicked.connect(lambda: self.next(auto=False))
-        self.btn_stop.clicked.connect(self.player.stop)
+        self.btn_stop.clicked.connect(self.engine.stop)
         self.btn_play.clicked.connect(self.toggle)
         self.btn_shuffle.toggled.connect(lambda v: setattr(self, "shuffle", v))
         self.btn_repeat.clicked.connect(self.cycle_repeat)
         self.theme_box.currentTextChanged.connect(self.apply_theme)
         self.playlist.itemDoubleClicked.connect(lambda _: self.play_index(self.playlist.currentRow()))
-        self.seek.sliderMoved.connect(self.player.setPosition)
-        self.volume.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
-        self.player.positionChanged.connect(self.on_position)
-        self.player.durationChanged.connect(lambda d: self.seek.setRange(0, d))
-        self.player.playbackStateChanged.connect(self.on_state)
-        self.player.mediaStatusChanged.connect(self.on_status)
+        self.seek.sliderMoved.connect(self.engine.seek)
+        self.volume.valueChanged.connect(lambda v: self.engine.set_volume(v / 100))
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
@@ -493,6 +702,26 @@ class Player(QWidget):
 
         self.volume.setValue(70)
         self.load_state()
+        if not self.audio_ok:
+            QTimer.singleShot(400, lambda: QMessageBox.warning(
+                self, APP_NAME, f"Could not open the audio output:\n{self.engine.error}"))
+
+    # ----- equalizer -----
+    def show_eq(self):
+        self.eq_dialog.show()
+        self.eq_dialog.raise_()
+
+    def on_eq_preset(self, name):
+        if name in EQ_PRESETS:
+            g = EQ_PRESETS[name]
+            self.eq_dialog.set_gains(g)
+            self.engine.set_gains(g)
+
+    def on_eq_slider(self, gains):
+        self.eq_box.blockSignals(True)
+        self.eq_box.setCurrentText("Custom")
+        self.eq_box.blockSignals(False)
+        self.engine.set_gains(gains)
 
     # ----- bar graph: colour, style, detach -----
     def set_bar_color(self, name):
@@ -541,19 +770,25 @@ class Player(QWidget):
             elif self.auto_detached:
                 self.attach()
 
-    # ----- visualizer -----
-    def on_buffer(self, buf):
-        try:
-            lv = spectrum(buf, BANDS)
+    # ----- main timer: bars, position, track end -----
+    def tick(self):
+        eng = self.engine
+        if eng.ended:
+            eng.ended = False
+            self.next(auto=True)
+        playing = eng.playing
+        if playing:
+            lv = spectrum(eng.get_viz(), BANDS)
             if lv is not None:
                 self.bars.push(lv)
-        except Exception:
-            self.fake = True  # fall back to animated bars
-
-    def tick(self):
-        if self.fake and self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.bars.push(np.random.rand(BANDS) * np.linspace(0.9, 0.3, BANDS))
         self.bars.decay()
+        txt = "⏸" if playing else "▶"
+        if self.btn_play.text() != txt:
+            self.btn_play.setText(txt)
+        pos, dur = eng.position_ms(), eng.duration_ms()
+        if not self.seek.isSliderDown():
+            self.seek.setValue(pos)
+        self.time.setText(f"{fmt(pos)} / {fmt(dur)}")
 
     # ----- playlist -----
     def add_paths(self, paths, autoplay=True):
@@ -570,7 +805,7 @@ class Player(QWidget):
 
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
-            self, "Add audio files", str(Path.home()), "Audio (*.mp3 *.wav *.ogg *.flac *.m4a)")
+            self, "Add audio files", str(Path.home()), "Audio (*.mp3 *.wav *.ogg *.flac)")
         self.add_paths(files)
 
     def add_folder(self):
@@ -616,13 +851,13 @@ class Player(QWidget):
         del self.tracks[row]
         self.history.clear()
         if row == self.index:
-            self.player.stop()
+            self.engine.stop()
             self.index = -1
         elif row < self.index:
             self.index -= 1
 
     def clear_all(self):
-        self.player.stop()
+        self.engine.stop()
         self.playlist.clear()
         self.tracks.clear()
         self.history.clear()
@@ -664,30 +899,41 @@ class Player(QWidget):
     def play_index(self, i, from_history=False, play=True):
         if not 0 <= i < len(self.tracks):
             return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        err = None
+        try:
+            self.engine.load(self.tracks[i])
+        except Exception as ex:
+            err = str(ex)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if err:
+            QMessageBox.warning(self, APP_NAME, f"Could not play this file:\n{err}")
+            return
         if self.index >= 0 and not from_history and i != self.index:
             self.history.append(self.index)
         self.index = i
         self.playlist.setCurrentRow(i)
-        self.player.setSource(QUrl.fromLocalFile(self.tracks[i]))
+        self.seek.setRange(0, self.engine.duration_ms())
         self.show_meta(self.tracks[i])
         if play:
-            self.player.play()
+            self.engine.play()
 
     def toggle(self):
-        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.player.pause()
+        if self.engine.playing:
+            self.engine.pause()
         elif self.index == -1:
             self.play_index(max(0, self.playlist.currentRow()))
         else:
-            self.player.play()
+            self.engine.play()
 
     def next(self, auto=False):
         n = len(self.tracks)
         if not n:
             return
         if auto and self.repeat == 2:
-            self.player.setPosition(0)
-            self.player.play()
+            self.engine.seek(0)
+            self.engine.play()
             return
         if self.shuffle and n > 1:
             self.play_index(random.choice([i for i in range(n) if i != self.index]))
@@ -695,14 +941,14 @@ class Player(QWidget):
         nxt = self.index + 1
         if nxt >= n:
             if auto and self.repeat == 0:
-                self.player.stop()
+                self.engine.stop()
                 return
             nxt = 0
         self.play_index(nxt)
 
     def prev(self):
-        if self.player.position() > 3000:
-            self.player.setPosition(0)
+        if self.engine.position_ms() > 3000:
+            self.engine.seek(0)
         elif self.history:
             self.play_index(self.history.pop(), from_history=True)
         elif self.index > 0:
@@ -711,19 +957,6 @@ class Player(QWidget):
     def cycle_repeat(self):
         self.repeat = (self.repeat + 1) % 3
         self.btn_repeat.setText(REPEAT_LABELS[self.repeat])
-
-    def on_status(self, s):
-        if s == QMediaPlayer.MediaStatus.EndOfMedia:
-            self.next(auto=True)
-
-    def on_position(self, pos):
-        if not self.seek.isSliderDown():
-            self.seek.setValue(pos)
-        self.time.setText(f"{fmt(pos)} / {fmt(self.player.duration())}")
-
-    def on_state(self, state):
-        playing = state == QMediaPlayer.PlaybackState.PlayingState
-        self.btn_play.setText("⏸" if playing else "▶")
 
     # ----- theme -----
     def apply_theme(self, name):
@@ -766,7 +999,10 @@ class Player(QWidget):
                 "repeat": self.repeat, "theme": self.theme_box.currentText(),
                 "bar_color": self.color_box.currentText(),
                 "bar_style": self.style_box.currentIndex(),
-                "auto_pop": self.auto_pop.isChecked()}
+                "bar_on_top": self.on_top.isChecked(),
+                "auto_pop": self.auto_pop.isChecked(),
+                "eq_preset": self.eq_box.currentText(),
+                "eq_gains": self.eq_dialog.gains()}
         try:
             state_file().write_text(json.dumps(data, indent=2), encoding="utf-8")
         except OSError:
@@ -788,7 +1024,19 @@ class Player(QWidget):
         self.apply_theme(theme)
         self.color_box.setCurrentText(d.get("bar_color", "Fluorescent Green"))
         self.style_box.setCurrentIndex(d.get("bar_style", 0))
+        self.on_top.setChecked(d.get("bar_on_top", True))
         self.auto_pop.setChecked(d.get("auto_pop", True))
+        preset = d.get("eq_preset", "Flat")
+        if preset == "Custom":
+            g = d.get("eq_gains", [0] * 10)
+            self.eq_box.blockSignals(True)
+            self.eq_box.setCurrentText("Custom")
+            self.eq_box.blockSignals(False)
+            self.eq_dialog.set_gains(g)
+            self.engine.set_gains(g)
+        else:
+            self.eq_box.setCurrentText(preset)
+            self.on_eq_preset(preset)
         self.add_paths(d.get("tracks", []), autoplay=False)
         idx = d.get("index", -1)
         if 0 <= idx < len(self.tracks):
@@ -797,7 +1045,9 @@ class Player(QWidget):
     def closeEvent(self, e):
         self.float_win.blockSignals(True)
         self.float_win.close()
+        self.eq_dialog.close()
         self.save_state()
+        self.engine.close()
         super().closeEvent(e)
 
 
