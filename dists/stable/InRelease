@@ -1,0 +1,38 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: amd64
+Codename: stable
+Components: main
+Date: Fri, 06 Nov 2026 23:34:19 +0000
+Label: VibeBeat
+Origin: VibeBeat
+Suite: stable
+MD5Sum:
+ fadeba032b72457894beeab563db164a              858 main/binary-amd64/Packages
+ a8d34c8096ba7bac90a1d93460f43029              579 main/binary-amd64/Packages.gz
+SHA1:
+ d91ad6565a5f9c6e7725e4d74992258548a2ba7b              858 main/binary-amd64/Packages
+ 0d04ee3cb577a28f5ad2ae9544f99314fdfcf51b              579 main/binary-amd64/Packages.gz
+SHA256:
+ e021da791ba4d463e0fbd81078a14b1db9f78448081588f1490c3635b128d056              858 main/binary-amd64/Packages
+ d1f455f34cb09465f9dc72487d1d82f3e7e1790678fbe24a3c421fba37236f5c              579 main/binary-amd64/Packages.gz
+SHA512:
+ b0ebb76980bcdd521965221792d4dd2fe6fbab92486cd26a8e0781d39f75af98352fc079e1a9609c3f00657027b34d45451635ef38f172068834d06b5854ea3b              858 main/binary-amd64/Packages
+ 44e4be8deb57a61b3d23c202b7e2592843861bc03214b4504bcfe1d206cdeaad634734902f72ba3a81823be72165c249ae432f5a541877e25973f98c2db40d75              579 main/binary-amd64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCgAdFiEE4ghWK+euZe604Xm2xoVdAt7z08YFAmruY/sACgkQxoVdAt7z
+08ZT0Q//ZLdV5aAJYf5Ovsu2rzD4CnKR12rlxuixsfQWlC+IyeQhuBqG6ETWWSwT
+Rs9/Ml+cM0Uegf7Se9X+vzill5E6Mct2hC6lqyzxNXdAxATwUwZVgKwR8RhSYAQA
+aOOLtZFqG0txJnckUNxgKB9E2IXfsBCDIuIeCVOvMAcj5tNbjUaKKg5YMLZAFVX+
+3p2KkVqidgpPjLhZ0Z6z52+z5w7xBBfYdrgJBlgwF/+OFrIcUXApvD9rvpawMseU
+2rYXu5AadWD5yrscNMk0Sc7QjM5t2dQulkALlYSc0OugEfZW0kzbdAbFXaxp2ngT
+mtZihwPsahYhvBaSLlfuM+VfrVKALAzbArZnxnDz+S5R/bgX0iFyHdtedEvx8TVm
+DvOOsIQMxuWdzbjpFSxoi6KPlRjTxBSz+aPa2O9bSdQZ1UdB6QnOD5MHk1eX/C9v
+Oqs4FyycsPW88QfGqWVP6Ojn0ZED7ZygQ2cbTcNyqWz3IaKUl9NfsOt+4PGGuQ/g
+PcSMUoBQ50QSzNC57swWJJaSZaUcy7jbopbOIFPof9tsvrVB0UWN5fPTGvS3LV+w
+gtC0upEMiCB66LouPgERXFtMZ3GTPeSGn8Jx9n1fnXQVEFsHOCOa4B8G/8J0Ys33
+Ck3NFj2kmSyFl5cCIEfv8nkemK2e8pRfx9k1W7zEjhBDCt9c0CA=
+=90DA
+-----END PGP SIGNATURE-----

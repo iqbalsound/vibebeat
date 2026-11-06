@@ -1,0 +1,19 @@
+Architectures: amd64
+Codename: stable
+Components: main
+Date: Fri, 06 Nov 2026 23:34:19 +0000
+Label: VibeBeat
+Origin: VibeBeat
+Suite: stable
+MD5Sum:
+ fadeba032b72457894beeab563db164a              858 main/binary-amd64/Packages
+ a8d34c8096ba7bac90a1d93460f43029              579 main/binary-amd64/Packages.gz
+SHA1:
+ d91ad6565a5f9c6e7725e4d74992258548a2ba7b              858 main/binary-amd64/Packages
+ 0d04ee3cb577a28f5ad2ae9544f99314fdfcf51b              579 main/binary-amd64/Packages.gz
+SHA256:
+ e021da791ba4d463e0fbd81078a14b1db9f78448081588f1490c3635b128d056              858 main/binary-amd64/Packages
+ d1f455f34cb09465f9dc72487d1d82f3e7e1790678fbe24a3c421fba37236f5c              579 main/binary-amd64/Packages.gz
+SHA512:
+ b0ebb76980bcdd521965221792d4dd2fe6fbab92486cd26a8e0781d39f75af98352fc079e1a9609c3f00657027b34d45451635ef38f172068834d06b5854ea3b              858 main/binary-amd64/Packages
+ 44e4be8deb57a61b3d23c202b7e2592843861bc03214b4504bcfe1d206cdeaad634734902f72ba3a81823be72165c249ae432f5a541877e25973f98c2db40d75              579 main/binary-amd64/Packages.gz

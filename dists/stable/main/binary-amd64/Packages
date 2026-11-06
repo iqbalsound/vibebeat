@@ -1,0 +1,18 @@
+Package: vibebeat
+Version: 3.0.0
+Architecture: amd64
+Maintainer: Iqbal Uddin Khan <iqbalsound@yahoo.com>
+Depends: libc6, libegl1, libgl1, libxkbcommon-x11-0, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-render-util0, libxcb-shape0, libpulse0 | libasound2t64 | libasound2
+Filename: pool/main/vibebeat_3.0.0_amd64.deb
+Size: 91609256
+MD5sum: 8f08ac4f1d1042fcc5e1e6cff1120ce6
+SHA1: a8774e59e63905fe47e8873b423b6234e3c4e1f5
+SHA256: 54b7b3e0ebc58ba1a4b70a3c532a32b4a8704b317a05075b061c0e237f0086bc
+Section: sound
+Priority: optional
+Homepage: https://github.com/iqbalsound/vibebeat
+Description: VibeBeat MP3 player with graphic equalizer
+ A simple, fast MP3 player with a 10-band equalizer (Rock, Pop, Vocal,
+ Flat, Bass Boosted), playlists (XSPF, M3U, PLS), album art, detachable
+ spectrum bars and Light, Dark and Green-on-Black themes.
+
